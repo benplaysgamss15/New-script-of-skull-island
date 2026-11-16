@@ -59,6 +59,7 @@
   .act-btn.run.active { background: #171d24; color: #fff; border-color: #171d24; }
   .act-btn.attack.active { background: #b45309; color: #fff; border-color: #b45309; }
   .act-btn.scream.active { background: #a11b22; color: #fff; border-color: #a11b22; }
+  .act-btn.tongue.active { background: #9d174d; color: #fff; border-color: #9d174d; }
 
   @media (max-width: 640px) {
     .joy-zone { left: 16px; bottom: 18px; width: 120px; height: 120px; }
@@ -91,6 +92,7 @@
 
 <div class="actions-right">
   <div class="action-row">
+    <button id="btn-tongue" class="act-btn tongue">Tongue</button>
     <button id="btn-run" class="act-btn run">Run</button>
   </div>
   <div class="action-row">
@@ -234,6 +236,7 @@ skullcrawler.onScreamPeak = () => roar.trigger();
 const btnRun = document.getElementById('btn-run');
 const btnAttack = document.getElementById('btn-attack');
 const btnScream = document.getElementById('btn-scream');
+const btnTongue = document.getElementById('btn-tongue');
 const btnPov = document.getElementById('btn-pov');
 const btnSound = document.getElementById('btn-sound');
 
@@ -248,12 +251,16 @@ btnRun.addEventListener('click', () => { roar.unlock(); setRunToggle(!runToggle)
 
 skullcrawler.onAttackEnd = () => btnAttack.classList.remove('active');
 skullcrawler.onScreamEnd = () => btnScream.classList.remove('active');
+skullcrawler.onActionEnd = (name) => {
+  if (name === 'tongueAttack') btnTongue.classList.remove('active');
+};
 
 const triggerAttackAction = () => {
   roar.unlock();
   if (skullcrawler.triggerAttack()) {
     btnAttack.classList.add('active');
     btnScream.classList.remove('active');
+    btnTongue.classList.remove('active');
   }
 };
 const triggerScreamAction = () => {
@@ -261,10 +268,20 @@ const triggerScreamAction = () => {
   if (skullcrawler.triggerScream()) {
     btnScream.classList.add('active');
     btnAttack.classList.remove('active');
+    btnTongue.classList.remove('active');
+  }
+};
+const triggerTongueAction = () => {
+  roar.unlock();
+  if (skullcrawler.playAction('tongueAttack')) {
+    btnTongue.classList.add('active');
+    btnAttack.classList.remove('active');
+    btnScream.classList.remove('active');
   }
 };
 btnAttack.addEventListener('click', triggerAttackAction);
 btnScream.addEventListener('click', triggerScreamAction);
+btnTongue.addEventListener('click', triggerTongueAction);
 
 const togglePov = () => {
   povMode = povMode === '3rd' ? '1st' : '3rd';
@@ -332,6 +349,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') setRunToggle(!runToggle);
   if (e.code === 'Space' || e.code === 'KeyE') { e.preventDefault(); triggerAttackAction(); }
   if (e.code === 'KeyQ' || e.code === 'KeyF') triggerScreamAction();
+  if (e.code === 'KeyT' || e.code === 'KeyG') triggerTongueAction();
   if (e.code === 'KeyV') togglePov();
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
