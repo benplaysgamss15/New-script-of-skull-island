@@ -1463,7 +1463,165 @@ export const ANIMATIONS = {
       return pose;
     },
   },
+  
+tongueAttack: {
+    type: 'action', duration: 2.35, blendRate: 5.5, moveSpeedScale: 0.08, turnLeanScale: 0.25,
+    events: [
+      { at: 0.21, name: 'tongueLaunch' },
+      { at: 0.34, name: 'tongueGrab' },
+      { at: 0.85, name: 'tongueBite' },
+      { at: 0.87, name: 'tongueRelease' },
+    ],
+    sample(ctx, pose) {
+      const u = clamp(ctx.u, 0, 1);
+      const T = [0.00, 0.10, 0.21, 0.33, 0.46, 0.62, 0.77, 0.89, 1.00];
+      const sp = (ys, uu = u) => splineKeys(T, ys, uu);
+      const damp = 1 - smoothstep(0.84, 0.98, u);
+      const uCh = clamp(u - 0.015 * damp, 0, 1);
+      const uNk = clamp(u - 0.025 * damp, 0, 1);
+      const uHd = clamp(u - 0.032 * damp, 0, 1);
 
+      // Tug/struggle micro-shake while prey is clamped (u = 0.35..0.66)
+      const struggleEnv = bell(u, 0.35, 0.66, 1.2);
+      const tugYaw = 0.075 * Math.sin((u - 0.35) * Math.PI * 5.0) * struggleEnv;
+      const tugRoll = 0.055 * Math.sin((u - 0.35) * Math.PI * 5.0 + 0.6) * struggleEnv;
+
+      // Body: coil low -> snap forward to shoot -> brace & haul backward -> bite snap -> settle
+      pose.pOff.set(
+        sp([0.00,  0.03,  0.05, -0.02, -0.04,  0.03,  0.01,  0.00, 0.00]),
+        sp([0.00, -0.14, -0.24, -0.14, -0.22, -0.05, -0.12, -0.08, 0.00]),
+        sp([0.00, -0.16, -0.32,  0.20,  0.12, -0.58, -0.24,  0.16, 0.00])
+      );
+      pose.pRot.set(
+        sp([0.00,  0.06,  0.08,  0.02, -0.04, -0.22, -0.10,  0.04, 0.00]),
+        sp([0.00, -0.03, -0.05,  0.02,  0.03, -0.02,  0.01,  0.00, 0.00]) + 0.3 * tugYaw,
+        sp([0.00, -0.02, -0.03,  0.02,  0.02, -0.02,  0.00,  0.00, 0.00]),
+        'YXZ'
+      );
+      pose.chRot.set(
+        sp([0.00,  0.10,  0.14, -0.04, -0.06, -0.16, -0.04,  0.06, 0.00], uCh),
+        sp([0.00,  0.04,  0.06, -0.02, -0.03,  0.02, -0.01,  0.00, 0.00], uCh) + 0.45 * tugYaw,
+        sp([0.00,  0.02,  0.03, -0.02, -0.02,  0.02,  0.00,  0.00, 0.00], uCh) + 0.5 * tugRoll
+      );
+      pose.n1Rot.set(
+        sp([0.00, -0.14, -0.24,  0.06,  0.08,  0.04, -0.04,  0.04, 0.00], uNk),
+        sp([0.00,  0.03,  0.04,  0.00, -0.02,  0.02,  0.00,  0.00, 0.00], uNk) + 0.5 * tugYaw,
+        0
+      );
+      pose.n2Rot.set(
+        sp([0.00, -0.10, -0.18,  0.04,  0.06,  0.06, -0.02,  0.03, 0.00], uNk),
+        sp([0.00,  0.02,  0.03,  0.00, -0.02,  0.02,  0.00,  0.00, 0.00], uNk) + 0.55 * tugYaw,
+        0
+      );
+      pose.hRot.set(
+        sp([0.00,  0.10,  0.18, -0.14, -0.08, -0.06, -0.04,  0.10, 0.00], uHd),
+        sp([0.00, -0.04, -0.06,  0.02,  0.02, -0.02,  0.01,  0.00, 0.00], uHd) + 0.8 * tugYaw,
+        sp([0.00, -0.03, -0.05,  0.02,  0.02,  0.00,  0.00,  0.00, 0.00], uHd) + tugRoll
+      );
+
+      // Jaw opens wide for shoot & reel-in, then snaps shut right after tongue clears teeth
+      pose.jaw = stepKeys([
+        [0.00, 0.18], [0.11, 0.64], [0.21, 1.06], [0.36, 0.98],
+        [0.76, 0.94], [0.82, 0.44], [0.86, 0.03], [0.92, 0.06], [1.00, 0.18],
+      ], u);
+      pose.tOut = stepKeys([
+        [0.00, 0.08], [0.18, 0.16], [0.25, 0.88], [0.42, 0.92],
+        [0.76, 0.72], [0.83, 0.02], [0.92, 0.04], [1.00, 0.08],
+      ], u);
+      pose.tWhip = Math.sin(u * Math.PI * 8) * bell(u, 0.18, 0.35, 1.4) + 0.55 * tugYaw;
+
+      // Tongue extension (tweak 11.0 up/down to change reach distance)
+      pose.tongueExtend = stepKeys([
+        [0.00, 1.00], [0.19, 0.88], [0.24, 3.60], [0.33, 11.0],
+        [0.44, 10.4], [0.54, 7.20], [0.68, 3.20], [0.79, 1.25],
+        [0.85, 0.95], [1.00, 1.00],
+      ], u);
+
+      // Compensate tongue0 pitch for jaw opening + spine pitch so tongue fires straight ahead
+      const pitchAboveTongue0 =
+        pose.pRot.x + pose.chRot.x + pose.n1Rot.x + pose.n2Rot.x + pose.hRot.x
+        + pose.jaw + (-0.10 - 0.28 * pose.tOut + 0.08 * pose.tWhip);
+      const targetWorldPitch = 0.05 - 0.07 * bell(u, 0.33, 0.72, 1.0);
+      const aimW = smoothstep(0.14, 0.22, u) * (1 - smoothstep(0.76, 0.86, u));
+      pose.tongueRot[0] = [
+        aimW * (targetWorldPitch - pitchAboveTongue0),
+        aimW * (-0.55 * (pose.hRot.y + pose.n2Rot.y)),
+        0,
+      ];
+
+      // 7-bone shaft bend: S-wave during launch whip, slight tension bow under prey weight
+      const whipAmp = bell(u, 0.19, 0.36, 1.3);
+      const tensionBow = bell(u, 0.33, 0.76, 0.85);
+      const tugShake = bell(u, 0.35, 0.65, 1.1);
+      for (let i = 1; i < pose.tongueRot.length; i++) {
+        const s = i / (pose.tongueRot.length - 1);
+        const launchPitch = 0.085 * Math.sin(u * 30 - i * 0.85) * whipAmp;
+        const launchYaw = 0.055 * Math.cos(u * 26 - i * 0.75) * whipAmp;
+        const bowPitch = (s < 0.55 ? 0.034 : -0.038) * tensionBow;
+        const shakeYaw = 0.022 * Math.sin(u * 40 - i * 0.9) * tugShake;
+        pose.tongueRot[i] = [launchPitch + bowPitch, launchYaw + shakeYaw, 0];
+      }
+
+      // 3-prong claw: flare wide right before strike -> clamp tightly onto target -> release at bite
+      const openFlare = stepKeys([
+        [0.00, 0], [0.18, 0.25], [0.27, 0.95], [0.33, 0.70],
+        [0.36, -0.22], [0.78, -0.18], [0.85, 0], [1.00, 0],
+      ], u);
+      const gripClamp = stepKeys([
+        [0.00, 0], [0.31, 0.00], [0.36, 1.08], [0.74, 1.02],
+        [0.83, 0.15], [0.88, 0], [1.00, 0],
+      ], u);
+      pose.prongSpread = openFlare;
+      pose.prongCurl = gripClamp;
+      pose.prongExtend = stepKeys([
+        [0.00, 1.00], [0.20, 1.05], [0.31, 1.32], [0.38, 1.15],
+        [0.76, 1.08], [0.85, 1.00], [1.00, 1.00],
+      ], u);
+      pose.prongRot[0] = [
+        [-0.24 * Math.max(0, openFlare), 0, 0],
+        [0.10 * gripClamp, 0, 0],
+        [0.14 * gripClamp, 0, 0],
+      ];
+      pose.prongRot[1] = [
+        [-0.08 * Math.max(0, openFlare), 0, 0],
+        [0, -0.08 * gripClamp, 0],
+        [0, -0.10 * gripClamp, 0],
+      ];
+      pose.prongRot[2] = [
+        [-0.08 * Math.max(0, openFlare), 0, 0],
+        [0, 0.08 * gripClamp, 0],
+        [0, 0.10 * gripClamp, 0],
+      ];
+
+      // Forelimbs: step wide to plant, dig claws into ground during yank, reset cleanly
+      const liftL = Math.max(0, splineKeys([0.00, 0.06, 0.14, 0.22, 0.78, 0.87, 0.94, 1.00], [0.00, 0.18, 0.00, 0.00, 0.00, 0.14, 0.00, 0.00], u));
+      const liftR = Math.max(0, splineKeys([0.00, 0.08, 0.16, 0.24, 0.80, 0.89, 0.96, 1.00], [0.00, 0.15, 0.00, 0.00, 0.00, 0.12, 0.00, 0.00], u));
+      pose.wL.set(sp([0.82, 0.88, 0.94, 0.92, 0.90, 0.90, 0.88, 0.84, 0.82]), 0.09 + liftL, sp([0.06, 0.14, 0.22, 0.26, 0.24, 0.24, 0.22, 0.14, 0.06]));
+      pose.wR.set(-sp([0.82, 0.88, 0.94, 0.92, 0.90, 0.90, 0.88, 0.84, 0.82]), 0.09 + liftR, sp([0.06, 0.12, 0.18, 0.22, 0.20, 0.20, 0.18, 0.12, 0.06]));
+      pose.swL = clamp(liftL / 0.18, 0, 1);
+      pose.swR = clamp(liftR / 0.15, 0, 1);
+
+      const brace = bell(u, 0.18, 0.84, 0.7);
+      const curl = 0.52 * stepKeys([[0.00, 0], [0.18, 0.6], [0.34, 1.0], [0.76, 1.0], [0.88, 0], [1.00, 0]], u);
+      pose.digitCurlL = [curl, curl, curl, curl];
+      pose.digitCurlR = [curl, curl, curl, curl];
+      pose.poleOffsetL.set(-0.14 * brace, 0.08 * brace, 0);
+      pose.poleOffsetR.set( 0.14 * brace, 0.08 * brace, 0);
+
+      // Tail counterbalance wave
+      const tailDamp = 1 - smoothstep(0.82, 0.98, u);
+      for (let i = 0; i < 6; i++) {
+        const us = clamp(u - (5 - i) * 0.018 * tailDamp, 0, 1);
+        const tyVal = sp([0.00, 0.04, 0.08, -0.05, 0.10, -0.14, 0.06, -0.02, 0.00], us) * (1 - 0.06 * i)
+          + 0.05 * Math.sin(us * Math.PI * 4 - i * 0.5) * struggleEnv;
+        pose.tP[i] = sp([0.00, 0.02, 0.04, 0.06, 0.04, -0.08, -0.03, 0.02, 0.00], us);
+        pose.tY[i] = tyVal;
+        pose.tR[i] = 0.25 * tyVal;
+      }
+      return pose;
+    },
+  },
+  
   turnLeft: { type: 'action', duration: 2.25, blendRate: 6.0, pivotTurn: true, dir: 1, sample: (ctx, pose) => sampleTurnPose(ctx.u, 1, pose) },
   turnRight: { type: 'action', duration: 2.25, blendRate: 6.0, pivotTurn: true, dir: -1, sample: (ctx, pose) => sampleTurnPose(ctx.u, -1, pose) },
 };
