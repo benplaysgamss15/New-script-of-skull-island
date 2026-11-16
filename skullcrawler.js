@@ -1176,3 +1176,697 @@ function buildHeadAssembly(headBone, materials) {
   const tongueRig = buildTongueRig(jawBone, materials.wetMat);
   return { jawBone, ...tongueRig };
 }
+
+// ============================================================================
+// 6. POSE SCHEMA, BLENDING & INDEPENDENT ANIMATION REGISTRY (ANIMATIONS)
+// ============================================================================
+function createPose() {
+  const w = ANATOMY.limb.wristRest;
+  return {
+    pOff: new THREE.Vector3(), pRot: new THREE.Euler(0, 0, 0, 'YXZ'),
+    chRot: new THREE.Vector3(), n1Rot: new THREE.Vector3(), n2Rot: new THREE.Vector3(), hRot: new THREE.Vector3(),
+    jaw: 0.18, tOut: 0.08, tWhip: 0,
+    tongueExtend: 1,
+    tongueRot: Array.from({ length: ANATOMY.tongue.boneZs.length }, () => [0, 0, 0]),
+    prongExtend: 1, prongSpread: 0, prongCurl: 0,
+    prongRot: Array.from({ length: 3 }, () => [[0, 0, 0], [0, 0, 0], [0, 0, 0]]),
+    tP: [0, 0, 0, 0, 0, 0], tY: [0, 0, 0, 0, 0, 0], tR: [0, 0, 0, 0, 0, 0],
+    wL: new THREE.Vector3(w.x, w.y, w.z), wR: new THREE.Vector3(-w.x, w.y, w.z),
+    swL: 0, swR: 0,
+    wYawL: null, wYawR: null, wPitchL: 0, wPitchR: 0, wRollL: 0, wRollR: 0,
+    poleYawL: null, poleYawR: null,
+    poleOffsetL: new THREE.Vector3(), poleOffsetR: new THREE.Vector3(),
+    digitCurlL: [0, 0, 0, 0], digitCurlR: [0, 0, 0, 0],
+    groupYawOffset: 0,
+  };
+}
+
+function blendPoses(pr, cur, a) {
+  if (!pr || a >= 1) return cur;
+  if (a <= 0) return pr;
+  const lerpArr3 = (a1, a2) => a1.map((v, i) => [lerp(v[0], a2[i][0], a), lerp(v[1], a2[i][1], a), lerp(v[2], a2[i][2], a)]);
+  const lerpDigit = (v1, v2, i) => lerp(Array.isArray(v1) ? (v1[i] ?? 0) : (v1 ?? 0), Array.isArray(v2) ? (v2[i] ?? 0) : (v2 ?? 0), a);
+  return {
+    pOff: pr.pOff.clone().lerp(cur.pOff, a),
+    pRot: new THREE.Euler(lerp(pr.pRot.x, cur.pRot.x, a), lerp(pr.pRot.y, cur.pRot.y, a), lerp(pr.pRot.z, cur.pRot.z, a), 'YXZ'),
+    chRot: pr.chRot.clone().lerp(cur.chRot, a), n1Rot: pr.n1Rot.clone().lerp(cur.n1Rot, a),
+    n2Rot: pr.n2Rot.clone().lerp(cur.n2Rot, a), hRot: pr.hRot.clone().lerp(cur.hRot, a),
+    jaw: lerp(pr.jaw, cur.jaw, a), tOut: lerp(pr.tOut, cur.tOut, a), tWhip: lerp(pr.tWhip, cur.tWhip, a),
+    tongueExtend: lerp(pr.tongueExtend ?? 1, cur.tongueExtend ?? 1, a),
+    tongueRot: lerpArr3(pr.tongueRot, cur.tongueRot),
+    prongExtend: lerp(pr.prongExtend ?? 1, cur.prongExtend ?? 1, a),
+    prongSpread: lerp(pr.prongSpread ?? 0, cur.prongSpread ?? 0, a),
+    prongCurl: lerp(pr.prongCurl ?? 0, cur.prongCurl ?? 0, a),
+    prongRot: pr.prongRot.map((pA, i) => lerpArr3(pA, cur.prongRot[i])),
+    tP: pr.tP.map((v, i) => lerp(v, cur.tP[i], a)), tY: pr.tY.map((v, i) => lerp(v, cur.tY[i], a)), tR: pr.tR.map((v, i) => lerp(v, cur.tR[i], a)),
+    wL: pr.wL.clone().lerp(cur.wL, a), wR: pr.wR.clone().lerp(cur.wR, a),
+    swL: lerp(pr.swL, cur.swL, a), swR: lerp(pr.swR, cur.swR, a),
+    wYawL: lerp(pr.wYawL ?? pr.pRot.y * 0.6, cur.wYawL ?? cur.pRot.y * 0.6, a),
+    wYawR: lerp(pr.wYawR ?? pr.pRot.y * 0.6, cur.wYawR ?? cur.pRot.y * 0.6, a),
+    wPitchL: lerp(pr.wPitchL ?? 0, cur.wPitchL ?? 0, a), wPitchR: lerp(pr.wPitchR ?? 0, cur.wPitchR ?? 0, a),
+    wRollL: lerp(pr.wRollL ?? 0, cur.wRollL ?? 0, a), wRollR: lerp(pr.wRollR ?? 0, cur.wRollR ?? 0, a),
+    poleYawL: lerp(pr.poleYawL ?? pr.pRot.y, cur.poleYawL ?? cur.pRot.y, a),
+    poleYawR: lerp(pr.poleYawR ?? pr.pRot.y, cur.poleYawR ?? cur.pRot.y, a),
+    poleOffsetL: pr.poleOffsetL.clone().lerp(cur.poleOffsetL, a),
+    poleOffsetR: pr.poleOffsetR.clone().lerp(cur.poleOffsetR, a),
+    digitCurlL: [0, 1, 2, 3].map(i => lerpDigit(pr.digitCurlL, cur.digitCurlL, i)),
+    digitCurlR: [0, 1, 2, 3].map(i => lerpDigit(pr.digitCurlR, cur.digitCurlR, i)),
+    groupYawOffset: lerp(pr.groupYawOffset ?? 0, cur.groupYawOffset ?? 0, a),
+  };
+}
+
+function applyTurnLean(pose, tb) {
+  pose.pRot.y += 0.05 * tb; pose.pRot.z -= 0.04 * tb;
+  pose.chRot.y += 0.14 * tb; pose.chRot.z -= 0.07 * tb;
+  pose.n1Rot.y += 0.17 * tb; pose.n2Rot.y += 0.14 * tb;
+  pose.hRot.y += 0.18 * tb; pose.hRot.z -= 0.07 * tb;
+  for (let i = 0; i < 6; i++) { pose.tY[i] -= 0.10 * tb * (0.65 + 0.07 * i); pose.tR[i] += 0.04 * tb; }
+}
+
+function evalTurnStep(u, phases) {
+  let ang = phases[0][2];
+  for (let i = 0; i < phases.length; i++) {
+    const [u0, u1, a0, a1, lh, ro] = phases[i];
+    if (u < u0) break;
+    if (u <= u1) {
+      const t = (u - u0) / (u1 - u0), sw = Math.sin(Math.PI * t);
+      return { ang: lerp(a0, a1, smootherstep(0, 1, t)), lift: lh * (sw ** 0.85), rad: ro * sw, sw };
+    }
+    ang = a1;
+  }
+  return { ang, lift: 0, rad: 0, sw: 0 };
+}
+
+function turnGroupYawMag(u) {
+  const phIn = [[0.14, 0.34, 0, Math.PI * 0.40, 0.32, 0.08], [0.52, 0.72, Math.PI * 0.40, Math.PI, 0.34, 0.08]];
+  const phOut = [[0.32, 0.54, 0, Math.PI * (118 / 180), 0.35, 0.10], [0.70, 0.88, Math.PI * (118 / 180), Math.PI, 0.28, 0.06]];
+  return lerp(0.5 * (evalTurnStep(u, phIn).ang + evalTurnStep(u, phOut).ang), Math.PI * smootherstep(0.14, 0.88, u), 0.40);
+}
+
+function turnPelvisWorldYawMag(u) {
+  return turnGroupYawMag(u)
+    - 0.055 * Math.sin(Math.PI * smootherstep(0.0, 0.18, u))
+    - 0.075 * Math.sin(Math.PI * smootherstep(0.14, 0.86, u))
+    + 0.025 * Math.sin(2.0 * Math.PI * smootherstep(0.78, 0.99, u)) * (1.0 - smootherstep(0.86, 0.995, u));
+}
+
+function sampleTurnPose(uRaw, dir, pose) {
+  const u = clamp(uRaw, 0, 1);
+  const phIn = [[0.14, 0.34, 0, Math.PI * 0.40, 0.32, 0.08], [0.52, 0.72, Math.PI * 0.40, Math.PI, 0.34, 0.08]];
+  const phOut = [[0.32, 0.54, 0, Math.PI * (118 / 180), 0.35, 0.10], [0.70, 0.88, Math.PI * (118 / 180), Math.PI, 0.28, 0.06]];
+  const gYawMag = turnGroupYawMag(u), gYaw = dir * gYawMag, wPelvisMag = turnPelvisWorldYawMag(u);
+  const wChestMag = gYawMag + 0.14 * Math.sin(Math.PI * smootherstep(0.08, 0.82, u))
+    + 0.028 * Math.sin(Math.PI * smootherstep(0.80, 0.96, u)) * (1.0 - smootherstep(0.88, 0.98, u));
+  const wHeadMag = Math.PI * smootherstep(0.03, 0.62, u)
+    + 0.085 * Math.sin(Math.PI * smootherstep(0.42, 0.90, u)) * (1.0 - smootherstep(0.82, 0.97, u));
+  const wN2Mag = lerp(wChestMag, wHeadMag, 0.64), wN1Mag = lerp(wChestMag, wHeadMag, 0.30);
+  const pRotY = dir * (wPelvisMag - gYawMag), chRotY = dir * (wChestMag - wPelvisMag);
+
+  pose.groupYawOffset = gYaw;
+  pose.pOff.set(
+    dir * stepKeys([[0.00, 0.00], [0.11, -0.13], [0.24, -0.09], [0.35, 0.04], [0.44, 0.11], [0.54, 0.00], [0.63, -0.09], [0.72, 0.02], [0.80, 0.07], [0.91, -0.015], [1.00, 0.00]], u),
+    stepKeys([[0.00, 0.00], [0.12, -0.12], [0.24, -0.07], [0.34, -0.13], [0.44, -0.07], [0.54, -0.12], [0.63, -0.06], [0.73, -0.10], [0.82, -0.04], [0.92, 0.015], [1.00, 0.00]], u),
+    stepKeys([[0.00, 0.00], [0.12, -0.06], [0.45, 0.03], [0.82, 0.02], [1.00, 0.00]], u)
+  );
+  pose.pRot.set(
+    stepKeys([[0.00, 0.00], [0.13, 0.045], [0.50, 0.055], [0.85, 0.02], [0.94, -0.015], [1.00, 0.00]], u),
+    pRotY,
+    dir * stepKeys([[0.00, 0.00], [0.12, 0.055], [0.34, -0.070], [0.68, -0.055], [0.88, -0.015], [0.95, 0.010], [1.00, 0.00]], u),
+    'YXZ'
+  );
+  pose.chRot.set(stepKeys([[0.00, 0.00], [0.14, 0.03], [0.55, 0.04], [0.90, -0.01], [1.00, 0.00]], u), chRotY, dir * stepKeys([[0.00, 0.00], [0.14, 0.02], [0.45, -0.05], [0.85, -0.02], [1.00, 0.00]], u));
+  pose.n1Rot.set(stepKeys([[0.00, 0.00], [0.16, -0.04], [0.55, -0.03], [0.90, 0.01], [1.00, 0.00]], u), dir * (wN1Mag - wChestMag), 0);
+  pose.n2Rot.set(stepKeys([[0.00, 0.00], [0.18, -0.03], [0.55, -0.02], [1.00, 0.00]], u), dir * (wN2Mag - wN1Mag), 0);
+  pose.hRot.set(stepKeys([[0.00, 0.00], [0.14, 0.05], [0.45, -0.04], [0.85, -0.02], [1.00, 0.00]], u), dir * (wHeadMag - wN2Mag), dir * (-0.11 * Math.sin(Math.PI * smoothstep(0.04, 0.90, u))));
+
+  const driveEnv = Math.sin(Math.PI * smoothstep(0.05, 0.92, u));
+  pose.jaw = 0.20 + 0.09 * driveEnv;
+  pose.tOut = 0.08 + 0.07 * driveEnv;
+  pose.tWhip = dir * 0.45 * Math.sin(Math.PI * smoothstep(0.04, 0.65, u));
+
+  const sweepPitch = Math.sin(Math.PI * smoothstep(0.16, 0.94, u));
+  let prevMag = wPelvisMag;
+  for (let seg = 1; seg <= 6; seg++) {
+    const lag = 0.028 * seg * (1.0 - smootherstep(0.55, 0.95, u));
+    const whipEnv = smootherstep(0.73 + 0.012 * seg, 0.86 + 0.010 * seg, u) * (1.0 - smootherstep(0.87 + 0.010 * seg, 0.985, u));
+    const rebound = -0.018 * (seg / 6) * smootherstep(0.92, 0.96, u) * (1.0 - smootherstep(0.96, 0.998, u));
+    const wSegMag = turnPelvisWorldYawMag(clamp(u - lag, 0, 1)) + (0.036 * seg) * whipEnv + rebound;
+    const localYaw = dir * (wSegMag - prevMag);
+    prevMag = wSegMag;
+    const idx = 6 - seg;
+    pose.tY[idx] = localYaw;
+    pose.tP[idx] = (seg <= 3 ? 0.024 : 0.014) * sweepPitch;
+    pose.tR[idx] = 0.22 * localYaw;
+  }
+
+  const stIn = evalTurnStep(u, phIn), stOut = evalTurnStep(u, phOut);
+  const stL = dir === 1 ? stIn : stOut, stR = dir === 1 ? stOut : stIn;
+  const aL = dir * stL.ang, aR = dir * stR.ang;
+  const piv = new THREE.Vector3(0, 0, ANATOMY.locomotion.pivotLocalZ), rest = ANATOMY.limb.wristRest;
+  pose.wL.set(rest.x + stL.rad, rest.y, rest.z).sub(piv).applyAxisAngle(UP_AXIS, aL - gYaw).add(piv); pose.wL.y = rest.y + stL.lift;
+  pose.wR.set(-rest.x - stR.rad, rest.y, rest.z).sub(piv).applyAxisAngle(UP_AXIS, aR - gYaw).add(piv); pose.wR.y = rest.y + stR.lift;
+  pose.swL = stL.sw; pose.swR = stR.sw;
+  pose.wYawL = (aL - gYaw) + pRotY * 0.25; pose.wYawR = (aR - gYaw) + pRotY * 0.25;
+  pose.poleYawL = lerp(pRotY + chRotY * 0.4, aL - gYaw, 0.5); pose.poleYawR = lerp(pRotY + chRotY * 0.4, aR - gYaw, 0.5);
+  return pose;
+}
+
+// Add new animations here:
+// - type: 'loop'   -> sample(ctx, pose)                      | model.setAnimation(name)
+// - type: 'action' -> sample(ctx, pose) OR partial+apply(...) | model.playAction(name)
+// - type: 'layer'  -> apply(pose, ctx, weight)                | model.setLayer(name, weight)
+export const ANIMATIONS = {
+  idle: {
+    type: 'loop',
+    sample(ctx, pose) {
+      const t = ctx.time, ph = t * 1.65;
+      pose.pOff.set(0, 0.032 * Math.sin(ph), 0);
+      pose.chRot.set(0.03 * Math.sin(ph - 0.5), 0, 0);
+      pose.n1Rot.set(0, 0.11 * Math.sin(t * 0.72), 0);
+      pose.hRot.set(-0.04 * Math.cos(t * 1.1), 0.14 * Math.sin(t * 0.72 - 0.45), 0);
+      pose.jaw = 0.18 + 0.07 * Math.sin(ph);
+      pose.tOut = 0.08 + 0.06 * Math.sin(t * 1.8);
+      for (let i = 0; i < 6; i++) pose.tY[i] = 0.07 * Math.sin(t * 1.2 - i * 0.55);
+      return pose;
+    },
+  },
+
+  walk: {
+    type: 'loop',
+    sample(ctx, pose) {
+      const phL = ctx.gaitPhase ?? (ctx.time * 0.90 * Math.PI * 2), phR = phL + Math.PI;
+      const foot = (ph, s) => {
+        const u = ((ph % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
+        if (u < 0.58) { const st = u / 0.58; return [new THREE.Vector3(s * (0.82 + 0.04 * Math.sin(st * Math.PI)), 0.09, lerp(0.62, -0.46, st)), 0]; }
+        const sw = (u - 0.58) / 0.42;
+        return [new THREE.Vector3(s * (0.82 + 0.10 * Math.sin(sw * Math.PI)), 0.09 + 0.46 * (Math.sin(sw * Math.PI) ** 0.85), lerp(-0.46, 0.62, 0.5 - 0.5 * Math.cos(sw * Math.PI))), Math.sin(sw * Math.PI)];
+      };
+      [pose.wL, pose.swL] = foot(phL, 1); [pose.wR, pose.swR] = foot(phR, -1);
+      pose.pOff.set(0.09 * Math.sin(phL), 0.075 * Math.cos(2 * phL) - 0.035, 0.03 * Math.sin(2 * phL));
+      pose.pRot.set(0.03 * Math.sin(2 * phL), -0.10 * Math.cos(phL), 0.09 * Math.sin(phL), 'YXZ');
+      pose.chRot.set(0.05 * Math.sin(2 * phL), 0.16 * Math.cos(phL), -0.05 * Math.sin(phL));
+      pose.n1Rot.set(0.04 * Math.sin(2 * phL + 0.4), -0.08 * Math.cos(phL), 0);
+      pose.hRot.set(-0.07 * Math.sin(2 * phL + 0.6), -0.05 * Math.cos(phL), 0);
+      pose.jaw = 0.24 + 0.08 * Math.sin(2 * phL);
+      pose.tOut = 0.10 + 0.05 * Math.sin(2 * phL);
+      for (let i = 0; i < 6; i++) {
+        pose.tY[i] = 0.16 * Math.sin(phL - i * 0.72 + 0.4);
+        pose.tR[i] = 0.04 * Math.cos(phL - i * 0.6);
+        pose.tP[i] = 0.015 * Math.sin(2 * phL - i * 0.5);
+      }
+      return pose;
+    },
+  },
+
+  run: {
+    type: 'loop',
+    sample(ctx, pose) {
+      const phL = ctx.gaitPhase ?? (ctx.time * 2.10 * Math.PI * 2), phR = phL + Math.PI * 0.74, bPh = phL - 0.05 * Math.PI;
+      const foot = (ph, s) => {
+        const u = ((ph % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
+        if (u < 0.42) return [new THREE.Vector3(s * 0.80, 0.09, lerp(0.84, -0.54, u / 0.42)), 0];
+        const sw = (u - 0.42) / 0.58, lift = Math.sin(sw * Math.PI);
+        return [new THREE.Vector3(s * (0.80 + 0.12 * lift), 0.09 + 0.48 * (lift ** 0.85), lerp(-0.54, 0.84, 0.5 - 0.5 * Math.cos(sw * Math.PI))), 0.42 * lift * smoothstep(0.15, 0.65, lift)];
+      };
+      [pose.wL, pose.swL] = foot(phL, 1); [pose.wR, pose.swR] = foot(phR, -1);
+      pose.pOff.set(0.07 * Math.sin(phL), -0.03 - 0.08 * Math.cos(bPh), 0.10 * Math.sin(bPh));
+      pose.pRot.set(0.06 + 0.08 * Math.sin(bPh), 0.08 * Math.sin(phL), 0.05 * Math.cos(phL), 'YXZ');
+      pose.chRot.set(-0.07 * Math.sin(bPh), -0.11 * Math.sin(phL), 0);
+      pose.n1Rot.set(-0.07 - 0.06 * Math.sin(bPh), 0, 0);
+      pose.hRot.set(0.08 * Math.sin(bPh), 0, 0);
+      pose.jaw = 0.40 + 0.14 * Math.sin(bPh);
+      pose.tOut = 0.18 + 0.10 * Math.sin(bPh);
+      for (let i = 0; i < 6; i++) { pose.tY[i] = 0.22 * Math.sin(phL - i * 0.85); pose.tP[i] = -0.05 * Math.cos(bPh - i * 0.6); }
+      return pose;
+    },
+  },
+
+  scream: {
+    type: 'action', duration: 3.4, blendRate: 4.5, lockMovement: true, turnInputScale: 0.25,
+    events: [{ at: 0.16, name: 'screamPeak' }],
+    canCancel: (u, input) => u > 0.74 && (input?.forward ?? 0) > 0.25,
+    sample(ctx, pose) {
+      const t = ctx.elapsed, u = (t % 3.4) / 3.4;
+      const rear = Math.sin(clamp((u - 0.04) / 0.84, 0, 1) * Math.PI) ** 0.65;
+      const trm = Math.sin(t * 50) * rear, swp = Math.sin(u * Math.PI * 3) * rear;
+      const tOut = 0.12 + 0.88 * smoothstep(0.14, 0.58, rear);
+      pose.pOff.set(0, 0.14 * rear, -0.14 * rear);
+      pose.pRot.set(-0.28 * rear, 0.06 * swp, 0.04 * swp, 'YXZ');
+      pose.chRot.set(-0.20 * rear + 0.02 * trm, 0.10 * swp, 0);
+      pose.n1Rot.set(-0.16 * rear, 0.16 * swp, 0);
+      pose.n2Rot.set(-0.10 * rear, 0.12 * swp, 0);
+      pose.hRot.set(-0.22 * rear + 0.03 * trm, 0.12 * swp, 0.08 * swp);
+      pose.jaw = 0.20 + 0.92 * rear + 0.06 * trm;
+      pose.tOut = tOut; pose.tWhip = Math.sin(t * 14) * tOut;
+      pose.wL.set(0.92, 0.09, 0.22); pose.wR.set(-0.92, 0.09, 0.22);
+      for (let i = 0; i < 6; i++) {
+        pose.tP[i] = 0.075 * rear + 0.03 * Math.sin(t * 4.5 - i * 0.7) * rear;
+        pose.tY[i] = 0.19 * Math.sin(t * 3.8 - i * 0.65) * (0.3 + 0.7 * rear);
+        pose.tR[i] = 0.06 * Math.cos(t * 3.8 - i * 0.6);
+      }
+      return pose;
+    },
+  },
+
+  attack: {
+    type: 'action', duration: 1.62, blendRate: 5.5, moveSpeedScale: 0.35, turnLeanScale: 0.45,
+    sample(ctx, pose) {
+      const u = clamp(ctx.u, 0, 1);
+      const T = [0.00, 0.12, 0.24, 0.36, 0.48, 0.60, 0.74, 0.88, 1.00];
+      const sp = (ys, uu = u) => splineKeys(T, ys, uu);
+      const damp = 1 - smoothstep(0.70, 0.96, u);
+      const uCh = clamp(u - 0.015 * damp, 0, 1), uNk = clamp(u - 0.025 * damp, 0, 1), uHd = clamp(u - 0.035 * damp, 0, 1);
+
+      pose.pOff.set(sp([0.00, 0.04, 0.08, -0.02, -0.07, 0.04, 0.02, 0.00, 0.00]), sp([0.00, -0.10, -0.22, -0.06, 0.04, -0.05, 0.05, 0.01, 0.00]), sp([0.00, -0.18, -0.44, 0.16, 0.76, 0.58, -0.24, -0.08, 0.00]));
+      pose.pRot.set(sp([0.00, -0.03, -0.08, 0.04, 0.11, 0.08, -0.06, -0.02, 0.00]), sp([0.00, -0.04, -0.08, 0.02, 0.07, -0.05, -0.03, 0.00, 0.00]), sp([0.00, -0.02, -0.05, 0.02, 0.05, -0.04, -0.02, 0.00, 0.00]), 'YXZ');
+      pose.chRot.set(sp([0.00, -0.05, -0.12, 0.02, 0.16, 0.12, -0.09, -0.03, 0.00], uCh), sp([0.00, 0.05, 0.10, -0.02, -0.09, 0.06, 0.02, 0.00, 0.00], uCh), sp([0.00, 0.03, 0.06, -0.02, -0.06, 0.05, 0.02, 0.00, 0.00], uCh));
+      pose.n1Rot.set(sp([0.00, 0.14, 0.28, -0.04, -0.13, -0.02, -0.08, -0.02, 0.00], uNk), sp([0.00, 0.05, 0.10, 0.02, -0.08, 0.09, 0.03, 0.00, 0.00], uNk), 0);
+      pose.n2Rot.set(sp([0.00, 0.11, 0.22, -0.03, -0.12, -0.02, -0.06, -0.02, 0.00], uNk), sp([0.00, 0.04, 0.08, 0.02, -0.07, 0.08, 0.02, 0.00, 0.00], uNk), 0);
+      pose.hRot.set(sp([0.00, 0.12, 0.26, -0.10, -0.18, 0.06, -0.10, -0.03, 0.00], uHd), sp([0.00, -0.06, -0.12, 0.04, 0.10, -0.16, -0.04, 0.02, 0.00], uHd), sp([0.00, -0.08, -0.16, 0.05, 0.14, -0.18, -0.05, 0.00, 0.00], uHd));
+      pose.jaw = stepKeys([[0.00, 0.20], [0.18, 0.12], [0.36, 0.88], [0.45, 1.12], [0.51, 0.02], [0.62, 0.03], [0.78, 0.16], [1.00, 0.20]], u);
+      pose.tOut = stepKeys([[0.00, 0.04], [0.22, 0.02], [0.39, 0.26], [0.46, 0.00], [0.66, 0.00], [1.00, 0.05]], u);
+      pose.tWhip = Math.sin(u * Math.PI * 6) * smoothstep(0.24, 0.40, u) * (1 - smoothstep(0.43, 0.48, u));
+
+      const liftL = Math.max(0, splineKeys([0.00, 0.22, 0.34, 0.47, 0.60, 0.70, 0.80, 0.90, 1.00], [0.00, 0.00, 0.40, 0.00, 0.00, 0.22, 0.00, 0.06, 0.00], u));
+      const liftR = Math.max(0, splineKeys([0.00, 0.25, 0.37, 0.49, 0.62, 0.72, 0.82, 0.92, 1.00], [0.00, 0.00, 0.34, 0.00, 0.00, 0.19, 0.00, 0.05, 0.00], u));
+      pose.wL.set(sp([0.82, 0.86, 0.90, 0.82, 0.78, 0.80, 0.88, 0.84, 0.82]), 0.09 + liftL, sp([0.06, -0.06, -0.22, 0.28, 0.74, 0.58, -0.12, 0.00, 0.06]));
+      pose.wR.set(-sp([0.82, 0.86, 0.90, 0.84, 0.82, 0.82, 0.88, 0.84, 0.82]), 0.09 + liftR, sp([0.06, -0.04, -0.18, 0.20, 0.62, 0.50, -0.08, 0.02, 0.06]));
+      pose.swL = clamp(liftL / 0.40, 0, 1); pose.swR = clamp(liftR / 0.34, 0, 1);
+
+      const delayDamp = 1 - smoothstep(0.76, 0.96, u);
+      for (let i = 0; i < 6; i++) {
+        const us = clamp(u - (5 - i) * 0.018 * delayDamp, 0, 1);
+        const tyVal = sp([0.00, 0.06, 0.13, -0.04, -0.18, 0.12, 0.07, -0.02, 0.00], us) * (1 - 0.06 * i);
+        pose.tP[i] = sp([0.00, 0.02, 0.045, 0.08, 0.13, 0.10, 0.03, 0.00, 0.00], us);
+        pose.tY[i] = tyVal; pose.tR[i] = 0.28 * tyVal;
+      }
+      return pose;
+    },
+  },
+
+  turnLeft: { type: 'action', duration: 2.25, blendRate: 6.0, pivotTurn: true, dir: 1, sample: (ctx, pose) => sampleTurnPose(ctx.u, 1, pose) },
+  turnRight: { type: 'action', duration: 2.25, blendRate: 6.0, pivotTurn: true, dir: -1, sample: (ctx, pose) => sampleTurnPose(ctx.u, -1, pose) },
+};
+
+// ============================================================================
+// 7. SKELETON RIG, LIMB BUILDER & IK POSE APPLICATOR
+// ============================================================================
+function buildLimbRig(side, chestBone, chestW, skinMat) {
+  const { L1, L2, shoulderOffset, wristRest, elbowPole, digits: digitSpecs } = ANATOMY.limb;
+  const shLocal = new THREE.Vector3(side * shoulderOffset.x, shoulderOffset.y, shoulderOffset.z);
+  const S0 = chestW.clone().add(shLocal), W0 = new THREE.Vector3(side * wristRest.x, wristRest.y, wristRest.z);
+  const ik = solveTwoBoneIK(S0, W0, new THREE.Vector3(side * elbowPole.x, elbowPole.y, elbowPole.z), L1, L2);
+  const qU0 = new THREE.Quaternion().setFromRotationMatrix(computeBoneMatrix(S0, ik.E, ik.perp));
+  const qF0 = new THREE.Quaternion().setFromRotationMatrix(computeBoneMatrix(ik.E, W0, ik.perp));
+
+  const shB = new THREE.Bone(); shB.position.copy(shLocal); shB.quaternion.copy(qU0); chestBone.add(shB);
+  const elB = new THREE.Bone(); elB.position.set(0, -L1, 0); elB.quaternion.copy(qU0.clone().invert().multiply(qF0)); shB.add(elB);
+  const wrB = new THREE.Bone(); wrB.position.set(0, -L2, 0); wrB.quaternion.copy(qF0.clone().invert()); elB.add(wrB);
+
+  const spurPiv = new THREE.Group(); elB.add(spurPiv);
+  const spurMesh = new THREE.Mesh(createTubeGeometry(16, 12, t => ({
+    x: 0, y: -0.06 + 0.34 * t + 0.08 * t * t, z: -0.04 + 0.42 * t, r: 0.105 * ((1 - t) ** 1.25) + 0.003,
+    col: [lerp(0.21, 0.78, smoothstep(0.25, 0.75, t)), lerp(0.23, 0.75, smoothstep(0.25, 0.75, t)), lerp(0.19, 0.66, smoothstep(0.25, 0.75, t))],
+  })), skinMat);
+  spurMesh.castShadow = true; spurPiv.add(spurMesh);
+
+  const digits = digitSpecs.map(ds => {
+    const dp = new THREE.Group(); dp.position.set(side * ds.xo, -0.026, ds.zo); dp.rotation.y = ds.ang * side; wrB.add(dp);
+    const nL = 16, nRg = 12, dPos = [], dCol = [], dUv = [], dIdx = [];
+    for (let i = 0; i < nL; i++) {
+      const t = i / (nL - 1), ct = Math.max(0, (t - 0.70) / 0.30), ft = Math.min(1, t / 0.70);
+      const knk = Math.max(0, 0.016 * Math.sin(ft * Math.PI * 2.5)), sb = 0.5 + 0.5 * Math.sin(ft * Math.PI * 10);
+      const yC = t < 0.70 ? lerp(0.0, -0.036, ft) + knk : lerp(-0.036, -0.060, ct ** 0.65);
+      const rad = (t < 0.70 ? ds.rad * (1 - 0.38 * ft) + 0.010 * Math.max(0, Math.sin(ft * Math.PI * 3)) : ds.rad * 0.62 * (1 - 0.92 * ct)) * (0.72 + 0.28 * smoothstep(0, 0.12, t));
+      const col = t < 0.70 ? [lerp(0.22, 0.42, sb * 0.5), lerp(0.23, 0.41, sb * 0.5), lerp(0.20, 0.34, sb * 0.5)] : [lerp(0.14, 0.58, 0.35 * ct), lerp(0.13, 0.54, 0.35 * ct), lerp(0.11, 0.46, 0.35 * ct)];
+      for (let j = 0; j <= nRg; j++) {
+        const a = ((j % nRg) / nRg) * Math.PI * 2;
+        dPos.push(rad * Math.cos(a), yC + rad * 0.75 * Math.sin(a), t * ds.len); dCol.push(...col); dUv.push(t * ds.len * 0.79, (j / nRg) * (2 / 3));
+      }
+    }
+    const stride = nRg + 1;
+    for (let i = 0; i < nL - 1; i++) for (let j = 0; j < nRg; j++) {
+      const a = i * stride + j, b = (i + 1) * stride + j, c = (i + 1) * stride + j + 1, d = i * stride + j + 1;
+      dIdx.push(a, c, b, a, d, c);
+    }
+    const bc = dPos.length / 3; dPos.push(0, 0, -0.006); dCol.push(0.22, 0.23, 0.19); dUv.push(0, 1 / 3);
+    for (let j = 0; j < nRg; j++) dIdx.push(bc, j + 1, j);
+    const dGeo = new THREE.BufferGeometry();
+    dGeo.setAttribute('position', new THREE.Float32BufferAttribute(dPos, 3));
+    dGeo.setAttribute('color', new THREE.Float32BufferAttribute(dCol, 3));
+    dGeo.setAttribute('uv', new THREE.Float32BufferAttribute(dUv, 2));
+    dGeo.setIndex(dIdx); dGeo.computeVertexNormals();
+    const nAttr = dGeo.getAttribute('normal');
+    for (let i = 0; i < nL; i++) {
+      const i0 = i * stride, i1 = i0 + nRg;
+      const nx = nAttr.getX(i0) + nAttr.getX(i1), ny = nAttr.getY(i0) + nAttr.getY(i1), nz = nAttr.getZ(i0) + nAttr.getZ(i1);
+      const len = Math.hypot(nx, ny, nz) || 1e-8;
+      nAttr.setXYZ(i0, nx / len, ny / len, nz / len); nAttr.setXYZ(i1, nx / len, ny / len, nz / len);
+    }
+    const dm = new THREE.Mesh(dGeo, skinMat); dm.castShadow = dm.receiveShadow = true; dp.add(dm);
+    return dp;
+  });
+
+  return { side, shLocal, shB, elB, wrB, spurPiv, digits };
+}
+
+class SkeletonRig {
+  constructor(group, materials) {
+    this.group = group;
+    this.L1 = ANATOMY.limb.L1; this.L2 = ANATOMY.limb.L2;
+    const { ctrlS, ctrlZ, ctrlY, stationS, boneNames, pelvisIndex, chestIndex } = ANATOMY.spine;
+    const wPos = stationS.map(s => new THREE.Vector3(0, evalSpline(ctrlS, ctrlY, s), evalSpline(ctrlS, ctrlZ, s)));
+
+    this.spineBones = boneNames.map(n => { const b = new THREE.Bone(); b.name = n; return b; });
+    this.bones = {}; boneNames.forEach((n, i) => { this.bones[n] = this.spineBones[i]; });
+    this.bones.pelvis.position.copy(wPos[pelvisIndex]); this.group.add(this.bones.pelvis);
+    for (let i = pelvisIndex + 1; i < boneNames.length; i++) { this.spineBones[i].position.copy(wPos[i]).sub(wPos[i - 1]); this.spineBones[i - 1].add(this.spineBones[i]); }
+    for (let i = pelvisIndex - 1; i >= 0; i--) { this.spineBones[i].position.copy(wPos[i]).sub(wPos[i + 1]); this.spineBones[i + 1].add(this.spineBones[i]); }
+    this.pelvisRest = wPos[pelvisIndex].clone();
+
+    this.limbs = {
+      L: buildLimbRig(1, this.bones.chest, wPos[chestIndex], materials.skinMat),
+      R: buildLimbRig(-1, this.bones.chest, wPos[chestIndex], materials.skinMat),
+    };
+    const allBones = [...this.spineBones, this.limbs.L.shB, this.limbs.L.elB, this.limbs.L.wrB, this.limbs.R.shB, this.limbs.R.elB, this.limbs.R.wrB];
+
+    this.bodyMesh = new THREE.SkinnedMesh(buildBodyAndLimbsGeometry(wPos[chestIndex]), materials.skinMat);
+    this.bodyMesh.castShadow = this.bodyMesh.receiveShadow = true; this.bodyMesh.frustumCulled = false;
+    this.group.add(this.bodyMesh); this.group.updateMatrixWorld(true);
+    this.bodyMesh.bind(new THREE.Skeleton(allBones), new THREE.Matrix4());
+
+    const head = buildHeadAssembly(this.bones.headBase, materials);
+    this.jawBone = head.jawBone; this.tongueRoot = head.tongueRoot;
+    this.tongueBones = head.tongueBones; this.tongueRestDz = head.tongueRestDz;
+    this.tongueProngs = head.tongueProngs; this.prongRigs = head.prongRigs;
+  }
+
+  applyPose(pose, time) {
+    this.bones.pelvis.position.copy(this.pelvisRest).add(pose.pOff);
+    this.bones.pelvis.rotation.copy(pose.pRot);
+    this.bones.chest.rotation.set(pose.chRot.x, pose.chRot.y, pose.chRot.z);
+    this.bones.neck1.rotation.set(pose.n1Rot.x, pose.n1Rot.y, pose.n1Rot.z);
+    this.bones.neck2.rotation.set(pose.n2Rot.x, pose.n2Rot.y, pose.n2Rot.z);
+    this.bones.headBase.rotation.set(pose.hRot.x, pose.hRot.y, pose.hRot.z);
+
+    this.jawBone.rotation.x = pose.jaw;
+    const tE = pose.tOut, xyScale = 0.85 + 0.15 * tE, zBaseScale = 0.62 + 0.58 * tE;
+    const segStretch = (zBaseScale / xyScale) * (pose.tongueExtend ?? 1);
+    this.tongueRoot.visible = true;
+    this.tongueRoot.position.set(0, 0.024, 0.06 + 0.34 * tE);
+    this.tongueRoot.scale.setScalar(xyScale);
+    this.tongueRoot.rotation.set(-0.10 - 0.28 * tE + 0.08 * pose.tWhip, 0.14 * pose.tWhip, 0);
+    for (let i = 0; i < this.tongueBones.length; i++) {
+      const rot = pose.tongueRot[i] || [0, 0, 0];
+      this.tongueBones[i].rotation.set(rot[0], rot[1], rot[2], 'YXZ');
+      if (i > 0) this.tongueBones[i].position.z = this.tongueRestDz[i] * segStretch;
+    }
+    const prongZScale = (zBaseScale / xyScale) * (pose.prongExtend ?? 1), pSpread = pose.prongSpread ?? 0, pCurl = pose.prongCurl ?? 0;
+    for (let idx = 0; idx < this.prongRigs.length; idx++) {
+      const pInfo = this.prongRigs[idx], pRotArr = pose.prongRot[idx] || [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      pInfo.pivot.rotation.x = -0.10 * tE + 0.10 * Math.sin(time * 14 + idx * 1.4) * (0.15 + tE) + (idx === 0 ? pSpread * 0.18 : 0);
+      pInfo.pivot.rotation.y = (idx === 0 ? 0.08 : (idx === 1 ? 0.12 : -0.12)) * tE + 0.10 * pose.tWhip + pInfo.spreadSign * pSpread * 0.45;
+      for (let j = 0; j < 3; j++) {
+        const jr = pRotArr[j] || [0, 0, 0];
+        pInfo.bones[j].rotation.set(pCurl * 0.42 + jr[0], -pInfo.spreadSign * pCurl * 0.14 + jr[1], jr[2], 'YXZ');
+      }
+      for (let j = 1; j < pInfo.bones.length; j++) pInfo.bones[j].position.copy(pInfo.restOffsets[j]).multiplyScalar(prongZScale);
+    }
+
+    const { tailOrder, tailMinWorldY } = ANATOMY.spine;
+    tailOrder.forEach((n, i) => this.bones[n].rotation.set(pose.tP[5 - i], pose.tY[5 - i], pose.tR[5 - i], 'YXZ'));
+    this.group.updateMatrixWorld(true);
+    const tmp = new THREE.Vector3();
+    for (let i = 1; i < tailOrder.length; i++) {
+      this.bones[tailOrder[i]].getWorldPosition(tmp);
+      if (tmp.y < tailMinWorldY) { this.bones[tailOrder[i - 1]].rotation.x += Math.min(0.55, (tailMinWorldY - tmp.y) * 0.85); this.group.updateMatrixWorld(true); }
+    }
+
+    const grpQInv = this.group.quaternion.clone().invert(), chP = new THREE.Vector3(), chQ = new THREE.Quaternion();
+    this.bones.chest.getWorldPosition(chP); this.bones.chest.getWorldQuaternion(chQ);
+    chP.sub(this.group.position).applyQuaternion(grpQInv); chQ.premultiply(grpQInv);
+    const doIK = (limb, wTgt, sw, wYaw, wPitch, wRoll, poleYaw, poleOff, digitCurl) => {
+      const S = limb.shLocal.clone().applyQuaternion(chQ).add(chP);
+      const bp = ANATOMY.limb.elbowPole;
+      const pole = new THREE.Vector3(limb.side * bp.x, bp.y, bp.z).add(poleOff).applyAxisAngle(UP_AXIS, poleYaw);
+      const { E, W, perp } = solveTwoBoneIK(S, wTgt, pole, this.L1, this.L2);
+      const qU = new THREE.Quaternion().setFromRotationMatrix(computeBoneMatrix(S, E, perp));
+      const qF = new THREE.Quaternion().setFromRotationMatrix(computeBoneMatrix(E, W, perp));
+      limb.shB.quaternion.copy(chQ.clone().invert().multiply(qU));
+      limb.elB.quaternion.copy(qU.clone().invert().multiply(qF));
+      limb.wrB.quaternion.copy(qF.clone().invert().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.45 * sw + wPitch, wYaw, wRoll, 'YXZ'))));
+      limb.spurPiv.quaternion.copy(qF.clone().invert().multiply(qU.clone().slerp(qF, 0.42)));
+      limb.digits.forEach((d, idx) => { d.rotation.x = 0.40 * sw + (Array.isArray(digitCurl) ? (digitCurl[idx] ?? 0) : (digitCurl ?? 0)); });
+    };
+    doIK(this.limbs.L, pose.wL, pose.swL, pose.wYawL ?? pose.pRot.y * 0.6, pose.wPitchL ?? 0, pose.wRollL ?? 0, pose.poleYawL ?? pose.pRot.y, pose.poleOffsetL, pose.digitCurlL);
+    doIK(this.limbs.R, pose.wR, pose.swR, pose.wYawR ?? pose.pRot.y * 0.6, pose.wPitchR ?? 0, pose.wRollR ?? 0, pose.poleYawR ?? pose.pRot.y, pose.poleOffsetR, pose.digitCurlR);
+    this.group.updateMatrixWorld(true);
+  }
+}
+
+// ============================================================================
+// 8. ANIMATOR & PUBLIC MODEL FACADE
+// ============================================================================
+class Animator {
+  constructor(model, registry) {
+    this.model = model; this.registry = registry;
+    this.targetAnim = 'idle'; this.time = 0; this.gaitPhase = 0; this.blend = 1;
+    this.prevPose = null; this.usingInput = false;
+    this.moveBlend = 0; this.runBlend = 0; this.turnBlend = 0; this.turnStepBlend = 0; this.facingYaw = 0;
+    this.activeAction = null;
+    this.layers = new Map();
+  }
+
+  _fireActionEvent(actionName, eventName) {
+    if (eventName === 'screamPeak' && this.model.onScreamPeak) this.model.onScreamPeak();
+    if (this.model.onActionEvent) this.model.onActionEvent(actionName, eventName);
+  }
+
+  _fireActionEnd(state) {
+    if (!state) return;
+    if (state.name === 'attack' && this.model.onAttackEnd) this.model.onAttackEnd();
+    else if (state.name === 'scream' && this.model.onScreamEnd) this.model.onScreamEnd();
+    else if (state.def.pivotTurn && this.model.onTurnEnd) this.model.onTurnEnd(this.targetAnim);
+    if (this.model.onActionEnd) this.model.onActionEnd(state.name);
+  }
+
+  _cancelActiveAction(fireCallback = true) {
+    if (!this.activeAction) return;
+    const prev = this.activeAction; this.activeAction = null;
+    if (fireCallback) this._fireActionEnd(prev);
+  }
+
+  setBaseState(name) {
+    const def = this.registry[name];
+    if (!def || def.type !== 'loop') return false;
+    if (this.activeAction?.def.pivotTurn) { this.targetAnim = name; this.activeAction.returnAnim = name; return true; }
+    if (name === this.targetAnim && (!this.activeAction || this.activeAction.def.partial)) return true;
+    this.prevPose = this.getCurrentPose();
+    if (this.activeAction && !this.activeAction.def.partial) this._cancelActiveAction(true);
+    this.targetAnim = name; this.blend = 0;
+    return true;
+  }
+
+  playAction(name, opts = {}) {
+    const def = this.registry[name];
+    if (!def || def.type !== 'action') return false;
+    if (this.activeAction?.def.pivotTurn) return false;
+    if (this.activeAction && this.activeAction.name === name && !opts.restart) return false;
+    if (!def.partial) { this.prevPose = this.getCurrentPose(); this.blend = 0; }
+    this._cancelActiveAction(true);
+    const state = {
+      name, def, elapsed: 0, duration: opts.duration ?? def.duration ?? 1.0, firedEvents: new Set(),
+      returnAnim: (this.targetAnim === 'walk' || this.targetAnim === 'run') ? this.targetAnim : 'idle',
+    };
+    if (def.pivotTurn) {
+      const startYaw = normalizeAngle(this.model.group.rotation.y);
+      this.facingYaw = startYaw; state.startYaw = startYaw; state.targetYaw = startYaw + def.dir * Math.PI;
+      state.pivotWorld = new THREE.Vector3(0, 0, ANATOMY.locomotion.pivotLocalZ).applyAxisAngle(UP_AXIS, startYaw).add(this.model.group.position);
+    }
+    this.activeAction = state;
+    return true;
+  }
+
+  setLayer(name, targetWeight = 1, blendSpeed = null) {
+    const def = this.registry[name];
+    if (!def || def.type !== 'layer') return false;
+    const ex = this.layers.get(name), sp = blendSpeed ?? def.blendSpeed ?? 6;
+    if (ex) { ex.target = clamp(targetWeight, 0, 1); ex.speed = sp; }
+    else this.layers.set(name, { weight: 0, target: clamp(targetWeight, 0, 1), speed: sp });
+    return true;
+  }
+
+  getLayerWeight(name) { return this.layers.get(name)?.weight ?? 0; }
+
+  _sampleBaseLocomotion() {
+    const baseKey = (this.targetAnim !== 'walk' && this.targetAnim !== 'run' && this.registry[this.targetAnim]) ? this.targetAnim : 'idle';
+    const basePose = this.registry[baseKey].sample({ time: this.time, gaitPhase: this.gaitPhase }, createPose());
+    if (this.moveBlend <= 1e-3 && this.turnStepBlend <= 1e-3) {
+      if (Math.abs(this.turnBlend) > 1e-3) applyTurnLean(basePose, this.turnBlend);
+      return basePose;
+    }
+    const walkPose = this.registry.walk.sample({ time: this.time, gaitPhase: this.gaitPhase }, createPose());
+    const movePose = this.runBlend > 1e-3 ? blendPoses(walkPose, this.registry.run.sample({ time: this.time, gaitPhase: this.gaitPhase }, createPose()), this.runBlend) : walkPose;
+    let locoPose = movePose, locoWeight = this.moveBlend;
+    if (this.turnStepBlend > 1e-3) {
+      const ts = this.registry.walk.sample({ time: this.time, gaitPhase: this.gaitPhase }, createPose());
+      ts.wL.z = lerp(0.06, ts.wL.z, 0.35); ts.wR.z = lerp(0.06, ts.wR.z, 0.35);
+      ts.wL.x += 0.06 * ts.swL; ts.wR.x -= 0.06 * ts.swR;
+      locoPose = blendPoses(movePose, ts, this.turnStepBlend / Math.max(this.moveBlend + this.turnStepBlend, 1e-5));
+      locoWeight = clamp(this.moveBlend + 0.78 * this.turnStepBlend, 0, 1);
+    }
+    const pose = blendPoses(basePose, locoPose, smoothstep(0, 1, locoWeight));
+    if (Math.abs(this.turnBlend) > 1e-3) applyTurnLean(pose, this.turnBlend);
+    return pose;
+  }
+
+  _sampleBasePose() {
+    if (this.usingInput) return this._sampleBaseLocomotion();
+    return (this.registry[this.targetAnim] ?? this.registry.idle).sample({ time: this.time }, createPose());
+  }
+
+  _sampleActionPose(act, uOvr = null) {
+    const u = uOvr ?? clamp(act.elapsed / act.duration, 0, 1);
+    return act.def.sample({ u, elapsed: uOvr != null ? u * act.duration : act.elapsed, time: this.time, gaitPhase: this.gaitPhase }, createPose());
+  }
+
+  _applyOverlays(pose, actionScale = 1) {
+    for (const [name, st] of this.layers.entries()) {
+      if (st.weight > 1e-4) this.registry[name]?.apply?.(pose, { time: this.time, gaitPhase: this.gaitPhase }, st.weight * actionScale);
+    }
+    if (this.activeAction?.def.partial && this.activeAction.def.apply) {
+      const act = this.activeAction, u = clamp(act.elapsed / act.duration, 0, 1);
+      act.def.apply(pose, { u, elapsed: act.elapsed, time: this.time, gaitPhase: this.gaitPhase }, smoothstep(0, 0.12, u) * (1 - smoothstep(0.85, 1.0, u)));
+    }
+    return pose;
+  }
+
+  getCurrentPose() {
+    const cur = (this.activeAction && !this.activeAction.def.partial) ? this._sampleActionPose(this.activeAction) : this._sampleBasePose();
+    const blended = (this.blend < 1 && this.prevPose) ? blendPoses(this.prevPose, cur, smoothstep(0, 1, this.blend)) : cur;
+    return this._applyOverlays(blended, this.activeAction?.def.layerScale ?? 1);
+  }
+
+  update(dt, speed, input = null) {
+    this.time += dt * speed; this.usingInput = Boolean(input);
+    const blendRate = (this.activeAction?.def.blendRate ?? 4.5) * Math.max(1, speed);
+    if (this.blend < 1) this.blend = Math.min(1, this.blend + dt * blendRate);
+
+    for (const [name, st] of this.layers.entries()) {
+      st.weight = lerp(st.weight, st.target, 1 - Math.exp(-st.speed * dt));
+      if (st.target === 0 && st.weight < 1e-4) this.layers.delete(name);
+    }
+
+    if (input && !this.activeAction?.def.pivotTurn) {
+      const forwardIn = clamp(input.forward ?? 0, 0, 1), turnIn = clamp(input.turn ?? 0, -1, 1), runIn = Boolean(input.run);
+      if (this.activeAction?.def.canCancel?.(this.activeAction.elapsed / this.activeAction.duration, input)) {
+        this.prevPose = this.getCurrentPose(); this._cancelActiveAction(true); this.blend = 0;
+      }
+      const actDef = this.activeAction?.def;
+      const moveTarget = actDef?.lockMovement ? 0 : forwardIn;
+      const turnTarget = actDef?.turnInputScale != null ? turnIn * actDef.turnInputScale : turnIn;
+      const kMove = 1 - Math.exp(-9.5 * dt), kRun = 1 - Math.exp(-6.5 * dt), kTurn = 1 - Math.exp(-10.0 * dt);
+      this.moveBlend = lerp(this.moveBlend, moveTarget, kMove); if (this.moveBlend < 1e-4 && moveTarget === 0) this.moveBlend = 0;
+      this.runBlend = lerp(this.runBlend, runIn ? 1 : 0, kRun);
+      this.turnBlend = lerp(this.turnBlend, turnTarget, kTurn); if (Math.abs(this.turnBlend) < 1e-4 && turnTarget === 0) this.turnBlend = 0;
+      this.turnStepBlend = lerp(this.turnStepBlend, Math.abs(turnTarget) * (1 - clamp(moveTarget * 2, 0, 1)), kMove);
+
+      const forwardSpeed = lerp(ANATOMY.locomotion.walkSpeed, ANATOMY.locomotion.runSpeed, this.runBlend) * this.moveBlend * speed * (actDef?.moveSpeedScale ?? 1.0);
+      const turnAngSpeed = lerp(1.95, 1.55, this.moveBlend * this.runBlend) * speed;
+      this.facingYaw = normalizeAngle(this.facingYaw + this.turnBlend * turnAngSpeed * dt);
+      this.model.group.rotation.y = this.facingYaw;
+      this.model.group.position.x += Math.sin(this.facingYaw) * forwardSpeed * dt;
+      this.model.group.position.z += Math.cos(this.facingYaw) * forwardSpeed * dt;
+      if (input.bounds != null) {
+        this.model.group.position.x = clamp(this.model.group.position.x, -input.bounds, input.bounds);
+        this.model.group.position.z = clamp(this.model.group.position.z, -input.bounds, input.bounds);
+      }
+      const moveFreq = forwardSpeed / lerp(1.08 / 0.58, 1.38 / 0.42, this.runBlend);
+      const turnStepFreq = 0.92 * Math.abs(this.turnBlend) * this.turnStepBlend * speed;
+      this.gaitPhase = (this.gaitPhase + dt * Math.max(moveFreq, turnStepFreq) * Math.PI * 2) % (Math.PI * 2);
+    }
+
+    let cur;
+    if (this.activeAction) {
+      const act = this.activeAction;
+      act.elapsed += dt * speed;
+      const u = act.elapsed / act.duration;
+      if (act.def.events) for (const ev of act.def.events) if (u >= ev.at && !act.firedEvents.has(ev.name)) { act.firedEvents.add(ev.name); this._fireActionEvent(act.name, ev.name); }
+      if (u >= 1) {
+        if (!act.def.partial) { this.prevPose = blendPoses(this.prevPose, this._sampleActionPose(act, 1), smoothstep(0, 1, this.blend)); this.blend = 0; }
+        if (act.def.pivotTurn) {
+          this.facingYaw = normalizeAngle(act.targetYaw);
+          this.model.group.position.copy(act.pivotWorld).sub(new THREE.Vector3(0, 0, ANATOMY.locomotion.pivotLocalZ).applyAxisAngle(UP_AXIS, this.facingYaw));
+          if (Math.abs(this.model.group.position.x) < 1e-9) this.model.group.position.x = 0;
+          if (Math.abs(this.model.group.position.z) < 1e-9) this.model.group.position.z = 0;
+          this.model.group.rotation.y = this.facingYaw; this.targetAnim = act.returnAnim;
+        }
+        this.activeAction = null; this._fireActionEnd(act); cur = this._sampleBasePose();
+      } else if (act.def.partial) {
+        cur = this._sampleBasePose();
+      } else {
+        cur = this._sampleActionPose(act, u);
+        if (act.def.pivotTurn) {
+          const curYaw = act.startYaw + cur.groupYawOffset;
+          this.model.group.position.copy(act.pivotWorld).sub(new THREE.Vector3(0, 0, ANATOMY.locomotion.pivotLocalZ).applyAxisAngle(UP_AXIS, curYaw));
+          this.model.group.rotation.y = curYaw;
+        } else if (this.usingInput && Math.abs(this.turnBlend) > 1e-3 && act.def.turnLeanScale) applyTurnLean(cur, act.def.turnLeanScale * this.turnBlend);
+      }
+    } else {
+      cur = this._sampleBasePose();
+    }
+    const pose = (this.blend < 1 && this.prevPose) ? blendPoses(this.prevPose, cur, smoothstep(0, 1, this.blend)) : cur;
+    return this._applyOverlays(pose, this.activeAction?.def.layerScale ?? 1);
+  }
+}
+
+export class SkullcrawlerModel {
+  constructor({ maxAnisotropy = 4 } = {}) {
+    this.group = new THREE.Group();
+    const materials = createCreatureMaterials(maxAnisotropy);
+    this.skinMat = materials.skinMat; this.boneMat = materials.boneMat;
+    this.toothMat = materials.toothMat; this.wetMat = materials.wetMat;
+    this.L1 = ANATOMY.limb.L1; this.L2 = ANATOMY.limb.L2;
+
+    this.rig = new SkeletonRig(this.group, materials);
+    this.spineBones = this.rig.spineBones; this.bones = this.rig.bones;
+    this.pelvisRest = this.rig.pelvisRest; this.limbs = this.rig.limbs;
+    this.bodyMesh = this.rig.bodyMesh; this.jawBone = this.rig.jawBone;
+    this.tongueRoot = this.rig.tongueRoot; this.tongueProngs = this.rig.tongueProngs;
+
+    this.animations = { ...ANIMATIONS };
+    this.animator = new Animator(this, this.animations);
+    this.speed = 1;
+    this.onScreamPeak = null; this.onScreamEnd = null;
+    this.onAttackEnd = null; this.onTurnEnd = null;
+    this.onActionEvent = null; this.onActionEnd = null;
+  }
+
+  get targetAnim() { return this.animator.targetAnim; }
+  get attackActive() { return this.animator.activeAction?.name === 'attack'; }
+  get screamActive() { return this.animator.activeAction?.name === 'scream'; }
+  get turnActive() { return Boolean(this.animator.activeAction?.def.pivotTurn); }
+  get facingYaw() { return this.animator.facingYaw; }
+  set facingYaw(v) { this.animator.facingYaw = v; }
+  get moveBlend() { return this.animator.moveBlend; }
+  get runBlend() { return this.animator.runBlend; }
+  get turnBlend() { return this.animator.turnBlend; }
+
+  registerAnimation(name, def) { this.animations[name] = def; }
+  setAnimation(name) {
+    if (name === 'turnLeft' || name === 'turn_left') return this.triggerTurn('left');
+    if (name === 'turnRight' || name === 'turn_right') return this.triggerTurn('right');
+    if (name === 'scream') return this.triggerScream();
+    if (name === 'attack') return this.triggerAttack();
+    const def = this.animations[name];
+    if (!def) return false;
+    return def.type === 'action' ? this.animator.playAction(name) : this.animator.setBaseState(name);
+  }
+  playAction(name, opts) { return this.animator.playAction(name, opts); }
+  setLayer(name, weight = 1, blendSpeed = null) { return this.animator.setLayer(name, weight, blendSpeed); }
+  getLayerWeight(name) { return this.animator.getLayerWeight(name); }
+  triggerAttack() { return this.animator.playAction('attack'); }
+  triggerScream() { return this.animator.playAction('scream'); }
+  triggerTurn(dirOrName) { return this.animator.playAction((dirOrName === 'right' || dirOrName === -1) ? 'turnRight' : 'turnLeft'); }
+  update(dt, input = null) { this.rig.applyPose(this.animator.update(dt, this.speed, input), this.animator.time); }
+}
